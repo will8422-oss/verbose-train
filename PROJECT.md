@@ -17,7 +17,8 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 | Framework | Next.js 14 (App Router) |
 | Language | TypeScript |
 | Styling | Tailwind CSS |
-| Data Storage | JSON files |
+| Data Storage | JSON files (in repo) |
+| Automated Sync | GitHub Actions (cron) |
 | Primary Data Source | [kindle-api](https://github.com/Xetera/kindle-api) |
 | Metadata Enrichment | Open Library API |
 | Backup Import | Goodreads CSV |
@@ -38,9 +39,10 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 
 - [ ] Install and configure kindle-api
 - [ ] Kindle auth (cookie-based)
-- [ ] Sync endpoint (`/api/reading/kindle/sync`)
+- [ ] Sync script (`scripts/kindle-sync.ts`)
 - [ ] Merge logic (Kindle data + local data)
-- [ ] **Test:** Pull Kindle library, verify merge
+- [ ] GitHub Action for automated daily sync
+- [ ] **Test:** Pull Kindle library, verify merge, test Action locally
 
 ### MVP 3: Metadata & Lists
 **Goal:** Enrich book data, create reading lists
@@ -131,6 +133,13 @@ interface ReadingList {
 ## File Structure
 
 ```
+.github/
+└── workflows/
+    └── kindle-sync.yml            # Automated daily Kindle sync
+
+scripts/
+└── kindle-sync.ts                 # CLI script for syncing Kindle
+
 app/
 ├── reading/
 │   ├── page.tsx                   # Dashboard
@@ -224,6 +233,76 @@ The kindle-api requires Amazon session cookies:
    ```
 
 Cookies typically last ~30 days before needing refresh.
+
+## GitHub Action: Automated Kindle Sync
+
+The sync runs automatically via GitHub Actions - like a cron job hosted by GitHub.
+
+### How It Works
+
+1. **Scheduled trigger** - Runs daily at 6am UTC (configurable)
+2. **Manual trigger** - Click "Run workflow" in GitHub UI anytime
+3. **Pulls Kindle data** - Runs sync script with your stored credentials
+4. **Commits changes** - If books/progress changed, commits to repo
+5. **Auto-deploys** - Vercel detects push, rebuilds site
+
+### Workflow File
+
+```yaml
+# .github/workflows/kindle-sync.yml
+
+name: Sync Kindle Library
+
+on:
+  schedule:
+    - cron: '0 6 * * *'           # Daily at 6am UTC
+  workflow_dispatch:               # Manual trigger button
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync Kindle library
+        run: npx tsx scripts/kindle-sync.ts
+        env:
+          KINDLE_COOKIES: ${{ secrets.KINDLE_COOKIES }}
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --staged --quiet || git commit -m "Sync Kindle library [automated]"
+          git push
+```
+
+### Setup in GitHub
+
+1. Go to repo **Settings > Secrets and variables > Actions**
+2. Click **New repository secret**
+3. Name: `KINDLE_COOKIES`
+4. Value: Your JSON cookie string
+5. The Action will now run daily automatically
+
+### Cost
+
+- **Public repos:** Free unlimited
+- **Private repos:** 2,000 minutes/month free (this uses ~1-2 min/day)
+
+### Monitoring
+
+- View runs: **Actions** tab in GitHub
+- Get notified on failure: Enable in repo notification settings
+- Manual run: **Actions > Sync Kindle Library > Run workflow**
 
 ## Design Integration
 
