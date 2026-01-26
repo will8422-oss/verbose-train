@@ -2,6 +2,39 @@
 
 A reading list feature for [willruns.co](https://www.willruns.co/) that syncs with Kindle, tracks books, and surfaces reading data on the personal website.
 
+## Context & Key Decisions
+
+### Target Site: willruns.co
+- **Stack:** Next.js 14 (App Router), deployed on Vercel
+- **Design:** Dark theme (`bg-black`/`bg-gray-900`), white text, card-based layout
+- **Existing sections:** Marathon training, Strava stats, Recovery metrics, Blog
+- **New section:** Reading - fits alongside existing personal dashboard cards
+
+### Why JSON in Repo (not external DB)
+- Vercel serverless can't persist filesystem writes
+- JSON files are version controlled (history of reading over time)
+- Simple to edit manually if needed
+- Sync happens via GitHub Action → commit → auto-deploy
+- Can migrate to external DB later if needed
+
+### Why GitHub Actions for Sync
+- Free cron scheduling (no server needed)
+- Runs on GitHub's infrastructure
+- Commits directly to repo, triggers Vercel deploy
+- Easy to monitor and manually trigger
+- Secrets management built in
+
+### Why Two Models (Book vs ReadingEntry)
+- **Book:** Metadata that's the same for everyone (title, author, pages)
+- **ReadingEntry:** Your personal data (status, rating, notes, progress)
+- Allows same book to be re-read, or shared book data if expanded later
+
+### Data Source Priority
+1. **Kindle** (primary) - Auto-synced daily, includes reading progress
+2. **Manual entry** - For non-Kindle books
+3. **Goodreads import** - One-time migration of historical data
+4. **Open Library** - Enriches metadata (genres, descriptions, page counts)
+
 ## Features
 
 - **Kindle Sync** - Pull library and reading progress from Kindle account
@@ -32,7 +65,26 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 - [ ] TypeScript types/interfaces
 - [ ] JSON storage helpers
 - [ ] Book CRUD API routes (`/api/reading/books`)
-- [ ] **Test:** Add, edit, delete, list books via API
+- [ ] Reading entry CRUD API routes (`/api/reading/entries`)
+
+**Test commands:**
+```bash
+# List all books
+curl http://localhost:3000/api/reading/books
+
+# Add a book
+curl -X POST http://localhost:3000/api/reading/books \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Dune","authors":["Frank Herbert"],"genres":["sci-fi"]}'
+
+# Update book
+curl -X PUT http://localhost:3000/api/reading/books/[id] \
+  -H "Content-Type: application/json" \
+  -d '{"rating":5,"status":"finished"}'
+
+# Delete book
+curl -X DELETE http://localhost:3000/api/reading/books/[id]
+```
 
 ### MVP 2: Kindle Integration
 **Goal:** Sync books from Kindle account
@@ -42,7 +94,18 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 - [ ] Sync script (`scripts/kindle-sync.ts`)
 - [ ] Merge logic (Kindle data + local data)
 - [ ] GitHub Action for automated daily sync
-- [ ] **Test:** Pull Kindle library, verify merge, test Action locally
+
+**Test commands:**
+```bash
+# Run sync locally
+KINDLE_COOKIES='{"session-id":"..."}' npx tsx scripts/kindle-sync.ts
+
+# Verify data files updated
+cat data/books.json | jq '.[] | .title'
+
+# Test Action locally with act (optional)
+act -j sync --secret-file .secrets
+```
 
 ### MVP 3: Metadata & Lists
 **Goal:** Enrich book data, create reading lists
@@ -51,7 +114,20 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 - [ ] Auto-fetch genres, page counts, descriptions
 - [ ] Reading lists CRUD (`/api/reading/lists`)
 - [ ] Add/remove books from lists
-- [ ] **Test:** Create list, add books, verify metadata
+
+**Test commands:**
+```bash
+# Search Open Library
+curl "http://localhost:3000/api/reading/search?q=dune"
+
+# Create a list
+curl -X POST http://localhost:3000/api/reading/lists \
+  -H "Content-Type: application/json" \
+  -d '{"name":"2024 Favorites","bookIds":["id1","id2"]}'
+
+# Verify metadata enrichment
+curl http://localhost:3000/api/reading/books/[id] | jq '.genres, .pageCount'
+```
 
 ### MVP 4: Suggestions & Import
 **Goal:** Smart recommendations, data import
@@ -59,7 +135,20 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 - [ ] Suggestions engine (genre/author based)
 - [ ] Goodreads CSV parser
 - [ ] Import endpoint (`/api/reading/import`)
-- [ ] **Test:** Import Goodreads data, get suggestions
+
+**Test commands:**
+```bash
+# Get suggestions
+curl http://localhost:3000/api/reading/suggestions
+
+# Import Goodreads CSV
+curl -X POST http://localhost:3000/api/reading/import \
+  -F "file=@goodreads_library_export.csv" \
+  -F "source=goodreads"
+
+# Verify import (check for duplicates handled)
+curl http://localhost:3000/api/reading/books | jq 'length'
+```
 
 ### MVP 5: Frontend UI
 **Goal:** Pages that match willruns.co design
@@ -69,7 +158,15 @@ A reading list feature for [willruns.co](https://www.willruns.co/) that syncs wi
 - [ ] `/reading/lists` - All reading lists
 - [ ] `/reading/lists/[id]` - Single list view
 - [ ] Homepage card component
-- [ ] **Test:** Full UI walkthrough
+
+**Test checklist:**
+- [ ] Dashboard shows currently reading book with progress
+- [ ] Library filters by status, genre, rating
+- [ ] Book cards display cover, title, author, progress
+- [ ] Lists can be created, edited, deleted
+- [ ] Responsive on mobile
+- [ ] Dark theme matches willruns.co
+- [ ] Homepage card shows current book + yearly count
 
 ### Integration
 **Goal:** Merge into willruns.co
@@ -213,6 +310,65 @@ types/
 | POST | `/api/reading/import` | Import Goodreads CSV |
 | GET | `/api/reading/search?q=` | Search Open Library |
 | GET | `/api/reading/suggestions` | Get recommendations |
+
+## Deduplication Strategy
+
+Books can come from multiple sources. Matching logic:
+
+```
+1. ASIN match (Amazon ID) → definite same book
+2. ISBN match → definite same book
+3. Title + Author fuzzy match → likely same book (confirm)
+```
+
+### Merge Rules
+| Field | Priority |
+|-------|----------|
+| `asin` | Kindle only |
+| `isbn` | Open Library > Goodreads |
+| `coverUrl` | Kindle > Open Library > Goodreads |
+| `pageCount` | Open Library > Goodreads |
+| `genres` | Merge all sources |
+| `progress` | Kindle only (auto-updated) |
+| `rating/notes` | Manual entry (never overwritten) |
+
+### On Conflict
+- Never overwrite user's manual ratings/notes
+- Kindle progress always wins (most accurate)
+- Log conflicts for manual review
+
+## Error Handling
+
+### Kindle Cookie Expiry
+- Cookies last ~30 days
+- On auth failure: GitHub Action logs error, sends notification
+- **Recovery:** Update `KINDLE_COOKIES` secret in GitHub, re-run workflow
+- Local data unaffected - just stops syncing until fixed
+
+### API Failures
+| Service | On Failure |
+|---------|------------|
+| Kindle API | Skip sync, keep existing data, log error |
+| Open Library | Use partial data, retry on next sync |
+| Goodreads import | Show validation errors, don't import bad rows |
+
+### Missing Metadata
+- If Open Library can't find book: store with minimal data
+- Show "metadata incomplete" flag in UI
+- Allow manual editing to fill gaps
+
+## Rate Limits
+
+| Service | Limit | Our Usage |
+|---------|-------|-----------|
+| Open Library | 100 requests / 5 min | Batch enrichment with delays |
+| Kindle API | Unknown (private API) | Once daily, conservative |
+| GitHub Actions | 2000 min/month (private) | ~1-2 min/day = ~60 min/month |
+
+### Mitigation
+- Cache Open Library responses in book record
+- Only fetch metadata for new books
+- Exponential backoff on rate limit errors
 
 ## Kindle Auth Setup
 
