@@ -1,0 +1,50 @@
+name: Sync Kindle Library
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync Kindle library
+        id: sync
+        run: npx tsx scripts/kindle-sync.ts
+        env:
+          KINDLE_COOKIES: ${{ secrets.KINDLE_COOKIES }}
+          KINDLE_DEVICE_TOKEN: ${{ secrets.KINDLE_DEVICE_TOKEN }}
+          KINDLE_TLS_SERVER_URL: ${{ secrets.KINDLE_TLS_SERVER_URL }}
+          KINDLE_TLS_SERVER_API_KEY: ${{ secrets.KINDLE_TLS_SERVER_API_KEY }}
+
+      - name: Commit and push changes
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Sync Kindle library [automated]"
+            git push
+          fi
+
+      - name: Notify on auth failure
+        if: failure() && steps.sync.outcome == 'failure'
+        run: |
+          echo "::error title=Kindle sync failed::Check logs above. Cookies may be expired - refresh KINDLE_COOKIES secret."

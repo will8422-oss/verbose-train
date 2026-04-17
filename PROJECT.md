@@ -372,23 +372,37 @@ Books can come from multiple sources. Matching logic:
 
 ## Kindle Auth Setup
 
-The kindle-api requires Amazon session cookies:
+The kindle-api needs three pieces from your Amazon account plus an external TLS proxy.
 
-1. Log into [read.amazon.com](https://read.amazon.com) in your browser
-2. Open DevTools > Application > Cookies
-3. Copy these cookies:
-   - `session-id`
-   - `session-id-time`
-   - `ubid-main`
-   - `x-main`
-   - `at-main`
-   - `sess-at-main`
-4. Add to `.env.local`:
-   ```
-   KINDLE_COOKIES='{"session-id":"...","ubid-main":"...",...}'
-   ```
+### 1. Cookies (valid ~1 year)
 
-Cookies typically last ~30 days before needing refresh.
+Log into [read.amazon.com](https://read.amazon.com), open DevTools > Application > Cookies, and copy:
+- `ubid-main`
+- `at-main`
+- `x-main`
+- `session-id`
+
+### 2. Device Token
+
+On read.amazon.com, check the Network tab for a `getDeviceToken` request. Copy the `serialNumber` value.
+
+### 3. TLS Client Server
+
+Amazon fingerprints TLS connections, so the API needs a proxy. Host [tls-client-api](https://github.com/bogdanfinn/tls-client-api) (Go service) on:
+- Your own VPS (cheap option: Hetzner, DigitalOcean)
+- A small cloud run instance
+- Fly.io free tier
+
+### Environment Variables
+
+```env
+KINDLE_COOKIES="ubid-main=...; at-main=...; x-main=...; session-id=..."
+KINDLE_DEVICE_TOKEN="..."
+KINDLE_TLS_SERVER_URL="https://your-tls-server.example.com"
+KINDLE_TLS_SERVER_API_KEY="..."
+```
+
+See `.env.example` in the repo.
 
 ## GitHub Action: Automated Kindle Sync
 
@@ -443,11 +457,16 @@ jobs:
 
 ### Setup in GitHub
 
-1. Go to repo **Settings > Secrets and variables > Actions**
-2. Click **New repository secret**
-3. Name: `KINDLE_COOKIES`
-4. Value: Your JSON cookie string
-5. The Action will now run daily automatically
+Go to repo **Settings > Secrets and variables > Actions** and add these four secrets:
+
+| Secret | Value |
+|--------|-------|
+| `KINDLE_COOKIES` | Cookie string from read.amazon.com |
+| `KINDLE_DEVICE_TOKEN` | From getDeviceToken request |
+| `KINDLE_TLS_SERVER_URL` | Your tls-client-api URL |
+| `KINDLE_TLS_SERVER_API_KEY` | API key for the TLS server |
+
+The Action will then run daily automatically.
 
 ### Cost
 
